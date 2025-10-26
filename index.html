@@ -1,0 +1,140 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Mini-Discord</title>
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <style>
+    body{margin:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto;background:#36393f;color:#dcddde;display:flex;height:100vh}
+    #sidebar{width:72px;background:#2f3136;display:flex;flex-direction:column;align-items:center;padding-top:12px}
+    .guild{width:48px;height:48px;background:#5865f2;border-radius:50%;margin-bottom:8px;cursor:pointer;display:grid;place-items:center;font-weight:bold}
+    #main{flex:1;display:flex;flex-direction:column}
+    #topbar{height:48px;background:#2f3136;display:flex;align-items:center;padding:0 16px;font-weight:bold}
+    #chat{flex:1;padding:8px 16px;overflow-y:auto}
+    #msgbox{display:flex;padding:8px}
+    #msgbox input{flex:1;background:#40444b;border:none;padding:8px 12px;border-radius:8px;color:#dcddde}
+    .msg{margin:4px 0;font-size:15px}
+    .msg b{margin-right:6px;color:#00aff4}
+    #login{display:grid;place-items:center;height:100vh;background:#2f3136}
+    #login form{background:#36393f;padding:32px;border-radius:8px;display:flex;flex-direction:column;gap:12px;width:280px}
+    #login input{padding:10px;border:none;border-radius:4px}
+    #login button{padding:10px;border:none;border-radius:4px;background:#5865f2;color:#fff;font-weight:bold;cursor:pointer}
+    a{color:#00aff4;text-decoration:none}
+  </style>
+</head>
+<body>
+  <div id="root"></div>
+  <script type="module">
+    import React, { useEffect, useState, useRef } from 'https://esm.sh/react@18';
+    import ReactDOM from 'https://esm.sh/react-dom@18';
+    import { io } from 'https://esm.sh/socket.io-client@4';
+
+    const API = location.origin.includes('github.io')
+      ? 'https://YOUR-BACKEND.onrender.com' // swap once
+      : 'http://localhost:4433';
+
+    const App = () => {
+      const [user, setUser] = useState(null);
+      const [servers, setServers] = useState([]);
+      const [channels, setChannels] = useState([]);
+      const [msgs, setMsgs] = useState([]);
+      const [body, setBody] = useState('');
+      const [sid, setSid] = useState('default');
+      const [cid, setCid] = useState(1);
+      const sock = useRef(null);
+
+      useEffect(() => {
+        fetch(`${API}/api/servers`).then(r => r.json()).then(setServers);
+      }, []);
+
+      useEffect(() => {
+        if (!sid) return;
+        fetch(`${API}/api/servers/${sid}/channels`).then(r => r.json()).then(ch => {
+          setChannels(ch); setCid(ch[0]?.id||1);
+        });
+      }, [sid]);
+
+      useEffect(() => {
+        if (!user || !cid) return;
+        fetch(`${API}/api/channels/${cid}/messages`, {
+          headers: { Authorization: 'Bearer ' + user.token }
+        }).then(r => r.json()).then(setMsgs);
+        sock.current = io(API, { auth: { token: user.token } });
+        sock.current.emit('join', { channel: cid });
+        sock.current.on('msg', m => setMsgs(x => [...x, m]));
+        return () => sock.current.disconnect();
+      }, [user, cid]);
+
+      const login = async (e) => {
+        e.preventDefault();
+        const u = e.target.username.value, p = e.target.password.value;
+        const r = await fetch(`${API}/api/login`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ username: u, password: p })
+        }).then(r => r.json());
+        if (r.token) setUser({ username: u, token: r.token });
+      };
+
+      const send = (e) => {
+        e.preventDefault();
+        if (!body.trim()) return;
+        sock.current.emit('msg', { channel: cid, body });
+        setBody('');
+      };
+
+      if (!user) return React.createElement('div', { id: 'login' },
+        React.createElement('form', { onSubmit: login },
+          React.createElement('h3', null, 'Mini-Discord'),
+          React.createElement('input', { name: 'username', placeholder: 'Username', required: true }),
+          React.createElement('input', { name: 'password', type: 'password', placeholder: 'Password', required: true }),
+          React.createElement('button', null, 'Login'),
+          React.createElement('a', { href: '#', onClick: async () => {
+            const u = prompt('Username'), p = prompt('Password');
+            if (!u||!p) return;
+            await fetch(`${API}/api/register`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ username: u, password: p })
+            });
+            alert('Account created – log in now');
+          } }, 'or Register')
+        )
+      );
+
+      return React.createElement('div', { style: { display: 'flex', height: '100%' } },
+        React.createElement('div', { id: 'sidebar' },
+          servers.map(s => React.createElement('div', {
+            className: 'guild', onClick: () => setSid(s.invite), key: s.id
+          }, s.name[0])),
+          React.createElement('div', {
+            className: 'guild', style: { background: '#3ba55d' }, onClick: async () => {
+              const n = prompt('New server name'); if (!n) return;
+              const r = await fetch(`${API}/api/servers`, {
+                method: 'POST', headers: { Authorization: 'Bearer ' + user.token, 'Content-Type': 'application/json' },
+                body: JSON.stringify({ name: n })
+              }).then(r => r.json());
+              location.reload();
+            }
+          }, '+')
+        ),
+        React.createElement('div', { id: 'main' },
+          React.createElement('div', { id: 'topbar' }, 'Channel #', channels.find(c=>c.id===cid)?.name||'general'),
+          React.createElement('div', { id: 'chat' },
+            msgs.map(m => React.createElement('div', { className: 'msg', key: m.id },
+              React.createElement('b', null, m.username), m.body
+            ))
+          ),
+          React.createElement('form', { id: 'msgbox', onSubmit: send },
+            React.createElement('input', {
+              value: body, onChange: e => setBody(e.target.value), placeholder: `Message #${channels.find(c=>c.id===cid)?.name||'general'}`
+            })
+          )
+        )
+      );
+    };
+
+    ReactDOM.createRoot(document.getElementById('root')).render(React.createElement(App));
+  </script>
+</body>
+</html>
